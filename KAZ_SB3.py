@@ -40,14 +40,18 @@ def train(env_fn, steps: int = 10_000, seed: int | None = 0, **env_kwargs):
     print(f"Starting training on {str(env.metadata['name'])}.")
 
     env = ss.pettingzoo_env_to_vec_env_v1(env)
-    env = ss.concat_vec_envs_v1(env, 8, num_cpus=1, base_class="stable_baselines3")
+    env = ss.concat_vec_envs_v1(env, 16, num_cpus=4, base_class="stable_baselines3")
 
     # Use a CNN policy if the observation space is visual
     model = PPO(
         CnnPolicy if visual_observation else MlpPolicy,
         env,
         verbose=3,
-        batch_size=256,
+        batch_size=512,         # Augmenter la taille du batch
+        learning_rate=0.0001,    # Diminuer le taux d'apprentissage
+        gamma=0.99,              # Ajuster gamma pour privilégier les récompenses à long terme
+        n_steps=4096,            # Augmenter le nombre d'étapes par mise à jour
+        ent_coef=0.001,           # Encourage l'exploration
     )
 
     model.learn(total_timesteps=steps, progress_bar=True)
@@ -95,6 +99,7 @@ def eval(env_fn, num_games: int = 100, render_mode: str | None = None, **env_kwa
         env.reset(seed=i)
         env.action_space(env.possible_agents[0]).seed(i)
 
+        # Evaluer le modèle sur tous les agents au lieu d'un mix d'agent aléatoire
         for agent in env.agent_iter():
             obs, reward, termination, truncation, info = env.last()
 
@@ -104,11 +109,10 @@ def eval(env_fn, num_games: int = 100, render_mode: str | None = None, **env_kwa
             if termination or truncation:
                 break
             else:
-                if agent == env.possible_agents[0]:
-                    act = env.action_space(agent).sample()
-                else:
-                    act = model.predict(obs, deterministic=True)[0]
+                # Utilise le modèle pour tous les agents
+                act = model.predict(obs, deterministic=True)[0]
             env.step(act)
+
     env.close()
 
     avg_reward = sum(rewards.values()) / len(rewards.values())
@@ -127,8 +131,10 @@ if __name__ == "__main__":
     # Set vector_state to false in order to use visual observations (significantly longer training time)
     env_kwargs = dict(max_cycles=100, max_zombies=4, vector_state=True)
 
-    # Train a model (takes ~5 minutes on a laptop CPU)
-    train(env_fn, steps=81_920, seed=0, **env_kwargs)
+    for difficulty_level in range(1, 5):
+        env_kwargs["max_zombies"] = difficulty_level
+        train(env_fn, steps=100_000, seed=0, **env_kwargs)
+
 
     # Evaluate 10 games (takes ~10 seconds on a laptop CPU)
     eval(env_fn, num_games=10, render_mode=None, **env_kwargs)
